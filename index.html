@@ -285,8 +285,8 @@ html{scroll-padding-top:110px;overflow-x:clip}
  who: S SensorTask, M MqttTask, C CommandTask, K ButtonTask, I interrupt
  taken: -1 = still running, -2 = not timed
 
-&lt;prefix&gt;/telemetry   {"seq":12,"why":"timer","t":27.4,"h":58,"gas":412,
-                     "lux":530,"p":1006.9,"tr":[…]}
+&lt;prefix&gt;/telemetry   {"seq":12,"why":"timer","t":27.4,"h":58,
+                     "light":55,"p":1006.9,"tr":[…]}
 &lt;prefix&gt;/system      every 5 s, from sysTimer: heap, uptime, rssi, interval,
                      q/qmax, cq/cqmax, oq/oqmax, cpu:[core0 %, core1 %],
                      mutex{holder,takes,waits,maxwait}, sem{isr,taken,presses,lat},
@@ -314,13 +314,12 @@ const rnd=Math.random;
 const M=[
  {k:'t',n:'Temperature',u:'°C',d:1,lv:v=>v<18?['mid','Cold','Below a comfortable room temperature']:v<=28?['good','Comfortable','Normal room temperature']:v<=35?['mid','Warm','Warmer than comfortable']:['bad','Hot','Too hot for comfort']},
  {k:'h',n:'Humidity',u:'%',d:0,lv:v=>v<30?['mid','Dry','Air is drier than ideal']:v<=60?['good','Comfortable','Healthy indoor humidity']:v<=75?['mid','Humid','A bit damp, mould can grow']:['bad','Very humid','Too damp for indoors']},
- {k:'gas',n:'Air quality (MQ-135)',u:'ppm',d:0,lv:v=>v<=600?['good','Good air','Fresh, well-ventilated air']:v<=1000?['mid','Moderate','Getting stuffy, open a window']:['bad','Poor air','Ventilate the room now']},
- {k:'lux',n:'Light',u:'lux',d:0,lv:v=>v<50?['mid','Dark','Too dark to read']:v<300?['good','Dim','Soft room light']:v<=1000?['good','Bright room','Good light for work']:['mid','Very bright','Direct sunlight level']},
+ {k:'light',n:'Light level (LDR)',u:'%',d:0,lv:v=>v<10?['mid','Dark','Too dark to read']:v<35?['good','Dim','Soft room light']:v<=75?['good','Bright room','Good light for work']:['mid','Very bright','Sunlight or a lamp very close']},
  {k:'p',n:'Air pressure',u:'hPa',d:1,lv:v=>v>=980&&v<=1040?['good','Normal','Normal air pressure']:['mid','Unusual','Outside the usual range']}];
 const TN={S:'SensorTask',M:'MqttTask',C:'CommandTask',K:'ButtonTask',I:'Interrupt (ISR)',W:'This computer'};
 const CORE={S:1,M:0,C:1,K:1,I:1};
 const TNODE={S:1,M:3,C:10,K:7,I:6};
-const FN={readTemperature:'Reads the temperature sensor',readHumidity:'Reads the humidity sensor',readGas:'Reads the MQ-135 gas sensor',readLight:'Reads the light sensor',readPressure:'Reads the pressure sensor',
+const FN={readTemperature:'Reads temperature from the BMP280 over I2C',readHumidity:'Reads humidity from the DHT sensor (one-wire pin)',readLight:'Reads the LDR voltage on the analog pin (ADC)',readPressure:'Reads air pressure from the BMP280 over I2C',
  'xSemaphoreTake(serialMutex)':'Locks serialMutex so no other task can print now','Serial.println':'Prints a log line on the Serial Monitor','xSemaphoreGive(serialMutex)':'Unlocks serialMutex for the other tasks',
  'xQueueSend(dataQueue)':'Copies the reading into dataQueue','xQueueReceive(dataQueue)':'Takes the reading out of dataQueue',buildJson:'Packs the values and this trace into JSON text','mqtt.publish':'Sends the JSON to the MQTT broker over Wi-Fi',
  mqttCallback:'Receives your message inside mqtt.loop() and puts it in cmdQueue','xQueueReceive(cmdQueue)':'Takes your command out of cmdQueue','C:xQueueSend(outQueue)':'Puts the reply into outQueue for MqttTask to send','K:xQueueSend(outQueue)':'Puts the button event into outQueue for MqttTask to send',
@@ -528,15 +527,15 @@ $('#ping').addEventListener('click',()=>sendCmd({cmd:'ping'},'Ping'));
 let armT=null;$('#restart').addEventListener('click',()=>{const b=$('#restart');if(!b.dataset.armed){b.dataset.armed='1';b.textContent='Tap again to restart';armT=setTimeout(()=>{delete b.dataset.armed;b.textContent='Restart ESP32'},3000);return}clearTimeout(armT);delete b.dataset.armed;b.textContent='Restart ESP32';sendCmd({cmd:'restart'},'Restart ESP32')});
 
 /* ---------- demo data (same format as the firmware) ---------- */
-let dT=null,dS=null,seq=0,boot=0,dInt=2000,dLive=true;const base={t:27.4,h:58,gas:430,lux:540,p:1006.8},step={t:.25,h:1.1,gas:12,lux:28,p:.15},lim={t:[18,40],h:[25,90],gas:[300,900],lux:[0,2000],p:[995,1020]};
+let dT=null,dS=null,seq=0,boot=0,dInt=2000,dLive=true;const base={t:27.4,h:58,light:55,p:1006.8},step={t:.25,h:1.1,light:2,p:.15},lim={t:[18,40],h:[25,90],light:[0,100],p:[995,1020]};
 const D0={mtx:0,wait:0,maxw:0,isr:0,taken:0,presses:0,lat:0,nS:0,nM:0,fires:0};let dd={...D0},lastWake=0;
 const nowUs=()=>Math.round((performance.now()-boot)*1000);
 function dMutex(tr,task,c,line){const w=rnd()<.06?400+(rnd()*1800|0):2+(rnd()*6|0);dd.mtx++;if(w>100)dd.wait++;dd.maxw=Math.max(dd.maxw,w);tr.push(['xSemaphoreTake(serialMutex)',task,c,w]);c+=w;const p=300+(rnd()*160|0);tr.push(['Serial.println',task,c,p]);c+=p;tr.push(['xSemaphoreGive(serialMutex)',task,c,3]);return c+3}
 function dTel(byButton){if(!dLive)return;seq++;for(const k in base)base[k]=Math.min(lim[k][1],Math.max(lim[k][0],base[k]+(rnd()-.5)*step[k]*2));
   let c=nowUs();const slept=Math.max(1000,c-lastWake);lastWake=c;const tr=[['ulTaskNotifyTake','S',c-slept,slept]];
-  [['readTemperature',5100+(rnd()*400|0)],['readHumidity',20+(rnd()*20|0)],['readGas',55+(rnd()*20|0)],['readLight',1150+(rnd()*200|0)],['readPressure',850+(rnd()*150|0)]].forEach(([f,d])=>{tr.push([f,'S',c,d]);c+=d});
+  [['readTemperature',1050+(rnd()*120|0)],['readHumidity',5100+(rnd()*400|0)],['readLight',40+(rnd()*25|0)],['readPressure',1300+(rnd()*150|0)]].forEach(([f,d])=>{tr.push([f,'S',c,d]);c+=d});
   c=dMutex(tr,'S',c);tr.push(['xQueueSend(dataQueue)','S',c,-2]);c+=rnd()<.12?20000+(rnd()*60000|0):30+(rnd()*300|0);tr.push(['xQueueReceive(dataQueue)','M',c,-2]);c=dMutex(tr,'M',c+5);tr.push(['buildJson','M',c,160+(rnd()*60|0)]);c+=200;tr.push(['mqtt.publish','M',c,-1]);
-  handle(S.pre+'/telemetry',JSON.stringify({seq,why:byButton?'button':'timer',t:+base.t.toFixed(1),h:Math.round(base.h),gas:Math.round(base.gas),lux:Math.round(base.lux),p:+base.p.toFixed(1),tr}))}
+  handle(S.pre+'/telemetry',JSON.stringify({seq,why:byButton?'button':'timer',t:+base.t.toFixed(1),h:Math.round(base.h),light:Math.round(base.light),p:+base.p.toFixed(1),tr}))}
 function dSys(){if(!dLive)return;dd.fires++;dd.nM++;const busy=rnd()<.85?'B':'Y';
   handle(S.pre+'/system',JSON.stringify({heap:206000-(rnd()*6000|0),minheap:191200,uptime:Math.round((performance.now()-boot)/1000),rssi:-55-(rnd()*14|0),interval:dInt,q:rnd()<.15?1:0,qmax:10,cq:0,cqmax:5,oq:0,oqmax:6,dropped:0,cdropped:0,cpu:[14+(rnd()*12|0),3+(rnd()*5|0)],
     mutex:{holder:rnd()<.08?'SensorTask':'',takes:dd.mtx,waits:dd.wait,maxwait:dd.maxw},sem:{isr:dd.isr,taken:dd.taken,presses:dd.presses,lat:dd.lat},ev:{wifi:1,mqtt:1},tmr:{period:5000,fires:dd.fires,active:1},ntf:{sensor:dd.nS,mqtt:dd.nM},
