@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 Station Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* VOICE: calm lab instrument that explains itself in plain words during a live demo
+   IDEA: a logic analyser clipped onto the board: every function call and every FreeRTOS object is captured and replayed
+   PICTURE: map of the board: data out in orange, commands in blue, interrupts/notifications/timer in purple
+   COLOUR and TYPE: aluminium / night ground, black ink, orange = data, blue = commands, purple = signals; Geist + Geist Mono
+   LAYOUT: status bar + section links, readings, inside the ESP32, FreeRTOS concepts, send + raw, history, connection */
+:root{color-scheme:light dark;--bg:light-dark(#e9eaec,#141517);--panel:light-dark(#f7f8f9,#1c1d21);--ink:light-dark(#111214,#eceef0);--mute:light-dark(#575e67,#9ca2ab);--line:light-dark(#c6c9cf,#31343b);--acc:#ff4f00;--cmd:light-dark(#1f5ad6,#79a6ff);--sig:light-dark(#7a3fd1,#b994ff);--ok:light-dark(#0a7a45,#43d18a);--warn:light-dark(#9a5a00,#ffb547);--bad:light-dark(#c0261b,#ff6b5e)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Geist,system-ui,-apple-system,"Segoe UI",sans-serif;overflow-x:clip}
+.band{padding:clamp(18px,3vw,36px) max(5vw,16px)}.band+.band{padding-top:0}
+.wrap{max-width:1240px;margin:0 auto}
+.mono,code{font-family:"Geist Mono",ui-monospace,Menlo,Consolas,monospace}
+code{font-size:.9em;overflow-wrap:anywhere}
+header.top{background:var(--panel);border-bottom:1px solid var(--line);z-index:5}
+@media(min-width:901px){header.top{position:sticky;top:0}}
+.bar{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;justify-content:space-between;padding:10px max(5vw,16px) 6px}
+.brand{font-weight:600;font-size:17px;line-height:1.3}.brand small{display:block;font-weight:400;color:var(--mute);font-size:13px}
+nav.scroll{display:flex;gap:4px;padding:0 max(5vw,16px) 6px;overflow-x:auto}
+nav a{flex:none;color:var(--mute);text-decoration:none;font-size:14px;padding:8px 10px;border-radius:6px}
+nav a:hover,nav a:focus-visible{color:var(--ink);background:var(--bg)}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;border:1px solid var(--line);font-size:14px;white-space:nowrap}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--acc);flex:none}
+.pill[data-s=live] .dot{background:var(--ok)}.pill[data-s=bad] .dot{background:var(--bad)}
+.pill[data-s=conn] .dot,.pill[data-s=wait] .dot{animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.25}}
+h1{font-size:clamp(28px,3.8vw,42px);line-height:1.05;margin:0 0 6px;font-weight:600;text-wrap:balance;letter-spacing:-.01em}
+h2{font-size:21px;line-height:1.2;margin:0;font-weight:600}
+h3{font-size:16px;margin:0;font-weight:600}
+.lead{color:var(--mute);margin:4px 0 0;max-width:74ch}
+.shead{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;justify-content:space-between;margin-bottom:12px}
+.meta{font-size:14px;color:var(--mute)}
+.panel,.card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.panel{padding:16px 18px}
+.two{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:18px;align-items:start}
+@media(max-width:960px){.two{grid-template-columns:minmax(0,1fr)}}
+/* readings */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:12px}
+.card{padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.ctop{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.lab{font-size:14px;color:var(--mute)}
+.val{font-size:clamp(30px,3.2vw,40px);font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;line-height:1.15}
+.val span{font-size:16px;color:var(--mute);margin-left:4px;font-weight:400}
+.hint{font-size:14px;min-height:1.5em}
+.mma{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums}
+svg.spark{width:100%;height:34px;display:block;margin:4px 0}
+.chip{display:inline-block;font-size:13px;font-weight:600;padding:2px 10px;border-radius:999px;white-space:nowrap;color:var(--mute);background:color-mix(in srgb,var(--mute) 14%,transparent)}
+.chip.good{color:var(--ok);background:color-mix(in srgb,var(--ok) 15%,transparent)}
+.chip.mid{color:var(--warn);background:color-mix(in srgb,var(--warn) 16%,transparent)}
+.chip.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 15%,transparent)}
+/* map */
+.now{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;font-size:17px;min-height:4.4em;display:flex;gap:12px;align-items:flex-start}
+.now .lab{flex:none;padding-top:2px}.now b{font-weight:600}
+.fig{position:relative;margin-top:12px}
+.fig>svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.encl{fill:color-mix(in srgb,var(--panel) 35%,transparent);stroke:var(--line);stroke-dasharray:6 5;stroke-width:1.5}.encl-t{font-size:13px;fill:var(--mute)}
+.node rect.box{fill:var(--panel);stroke:var(--line);stroke-width:1.5;transition:stroke .12s,fill .12s}
+.node.obj rect.box{stroke-dasharray:4 3}
+.node.hot rect.box{stroke:var(--acc);stroke-width:3;fill:color-mix(in srgb,var(--acc) 8%,var(--panel));stroke-dasharray:none}
+.node.hotc rect.box{stroke:var(--cmd);stroke-width:3;fill:color-mix(in srgb,var(--cmd) 9%,var(--panel));stroke-dasharray:none}
+.node.hots rect.box{stroke:var(--sig);stroke-width:3;fill:color-mix(in srgb,var(--sig) 10%,var(--panel));stroke-dasharray:none}
+.nname{font-weight:600;fill:var(--ink)}.nsub{font-size:12px;fill:var(--mute)}
+.nst{font-size:12.5px;font-weight:500;fill:var(--mute)}.nst.R{fill:var(--acc)}.nst.Y{fill:var(--ink)}.nst.on{fill:var(--ok)}.nst.held{fill:var(--sig)}
+.edge{stroke:var(--mute);stroke-opacity:.55;stroke-width:2}.edge.c{stroke:var(--cmd);stroke-opacity:.6;stroke-dasharray:5 4}.edge.n{stroke:var(--sig);stroke-opacity:.65;stroke-dasharray:2 4;stroke-linecap:round}
+.slot{fill:none;stroke:var(--line)}.slot.on{fill:var(--acc);stroke:var(--acc)}.slot.onc{fill:var(--cmd);stroke:var(--cmd)}
+.pkt{fill:var(--acc)}.cpk{fill:var(--cmd)}.spk{fill:var(--sig)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:14px;color:var(--mute);margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.ldot{width:12px;height:12px;border-radius:50%;display:inline-block}
+.speed{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+/* tables */
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:500;color:var(--mute);border-bottom:1px solid var(--line);padding:6px 8px 6px 0;font-size:13px}
+td{padding:7px 8px 7px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td small{display:block;color:var(--mute);font-size:12px}
+.fn{font-weight:500;overflow-wrap:anywhere}
+#trace tr{transition:background .15s}
+#trace tr.on{background:color-mix(in srgb,var(--acc) 13%,transparent)}
+#trace tr.on td:first-child{box-shadow:inset 3px 0 0 var(--acc)}
+.st{font-weight:600}.st.R{color:var(--acc)}.st.B{color:var(--mute)}
+dl.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px 16px;margin:0 0 14px}
+dl.stats dt{font-size:13px;color:var(--mute)}dl.stats dd{margin:0;font-size:18px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+/* concepts */
+.cgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr));gap:14px}
+.cc{display:flex;flex-direction:column;gap:8px}
+.cc .kind{font-size:13px;color:var(--mute)}
+.cc p{margin:0;font-size:14.5px}.cc p b{font-weight:600}
+.cc .why{color:var(--mute)}
+.live{border-top:1px solid var(--line);padding-top:10px;margin-top:auto;font-size:14px;display:grid;gap:6px}
+.kv{display:flex;justify-content:space-between;gap:10px}.kv span:first-child{color:var(--mute)}.kv span:last-child{font-variant-numeric:tabular-nums;font-weight:500;text-align:right}
+.meter{height:10px;border-radius:5px;background:color-mix(in srgb,var(--mute) 18%,transparent);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--acc);width:0;transition:width .4s}
+.meter.c i{background:var(--cmd)}.meter.s i{background:var(--sig)}
+.lamp{display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.lamp::before{content:"";width:11px;height:11px;border-radius:50%;background:var(--line)}
+.lamp.on::before{background:var(--ok)}
+/* controls */
+button{font:inherit;font-size:15px;min-height:44px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer}
+button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#111214;font-weight:600}
+button.send{background:var(--cmd);border-color:var(--cmd);color:light-dark(#fff,#0c1530);font-weight:600}
+button.sig{border-color:var(--sig);color:var(--sig);font-weight:600}
+button.danger[data-armed]{background:var(--bad);border-color:var(--bad);color:#fff}
+button:focus-visible,input:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+input{font:inherit;font-size:16px;min-height:44px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);width:100%}
+label{display:block;font-size:14px;color:var(--mute);margin:0 0 4px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.msgrow{display:flex;gap:8px}.msgrow input{flex:1}
+.ctl{margin-top:14px}.ctl .lab{display:block;margin-bottom:6px}
+.sw{display:inline-block;width:14px;height:14px;border-radius:50%;border:1px solid var(--line);vertical-align:-2px;margin-right:6px}
+ol.cmds,ol.log,ol.raw,ol.ctr{list-style:none;margin:0;padding:0}
+ol.cmds{max-height:340px;overflow:auto;margin-top:8px}
+ol.cmds>li{border-top:1px solid var(--line);padding:10px 0;font-size:14px}
+.ch{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cs{color:var(--mute)}.cs.ok{color:var(--ok)}.cs.bad{color:var(--bad)}
+ol.ctr{margin-top:6px;font-size:13px;color:var(--mute)}ol.ctr li{padding:2px 0}
+ol.ctr b{font-weight:500;color:var(--ink)}
+.empty{color:var(--mute);font-size:14px}
+/* raw */
+.rawbar{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.rawbar button{min-height:38px;font-size:14px;padding:0 10px}
+ol.raw{max-height:540px;overflow:auto;border-top:1px solid var(--line)}
+ol.raw li{border-bottom:1px solid var(--line)}
+ol.raw summary{cursor:pointer;display:grid;grid-template-columns:auto auto 1fr auto;gap:4px 10px;align-items:baseline;padding:8px 2px;font-size:13px;list-style:none}
+ol.raw summary::-webkit-details-marker{display:none}
+ol.raw time{color:var(--mute)}
+.tp{font-weight:600;white-space:nowrap}.tp.telemetry{color:var(--acc)}.tp.sent,.tp.ack{color:var(--cmd)}.tp.button{color:var(--sig)}
+.pv{color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.by{color:var(--mute);white-space:nowrap}
+ol.raw pre{margin:0 0 10px;font-size:12.5px}
+#raw[data-f=telemetry] li:not(.telemetry),#raw[data-f=system] li:not(.system),#raw[data-f=event] li:not(.event):not(.status),#raw[data-f=ack] li:not(.ack),#raw[data-f=sent] li:not(.sent),#raw[data-f=button] li:not(.button){display:none}
+@media(max-width:600px){ol.raw summary{grid-template-columns:auto 1fr auto}.pv{grid-column:1/-1}}
+/* misc */
+.hfig{position:relative;height:250px}.hfig>svg{position:absolute;inset:0;width:100%;height:100%}
+.grid{stroke:var(--line);stroke-dasharray:3 4}.ax{font-size:12px;fill:var(--mute);font-variant-numeric:tabular-nums}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+ol.log{max-height:300px;overflow:auto;font-size:14px}
+ol.log li{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid var(--line)}
+ol.log time{color:var(--mute);flex:none;font-size:13px}
+ol.log li.warn span{color:var(--warn)}ol.log li.bad span{color:var(--bad)}
+pre{overflow-x:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13px;line-height:1.5;margin:8px 0 0}
+.note{font-size:13px;color:var(--mute);margin:10px 0 0}
+html{scroll-padding-top:110px;overflow-x:clip}
+@media(min-width:601px){#trace .fn{white-space:nowrap}}
+@media(max-width:600px){table{font-size:13px}.stack thead{display:none}.stack tr{display:grid;padding-block:8px;border-bottom:1px solid var(--line)}.stack td{display:flow-root;border:0;padding:2px 0;padding-inline-start:7em;text-align:start}.stack td::before{content:attr(data-l);float:inline-start;width:6.5em;margin-inline-start:-7em;white-space:normal;color:var(--mute);font-weight:400}.stack td:empty{display:none}#trace tr.on td:first-child{box-shadow:none}}
+@media(prefers-reduced-motion:reduce){.pill .dot{animation:none!important}*{transition:none!important}}
+</style>
+<script>new MutationObserver(()=>{for(const c of document.querySelectorAll('.stack td:not([data-l])')){let i=0,p=c;while(p=p.previousElementSibling)i+=p.colSpan;c.dataset.l=c.closest('table').rows[0].cells[i]?.textContent||''}}).observe(document,{childList:true,subtree:true})</script>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <div class="brand">ESP32-S3 Environmental Station<small>FreeRTOS · MQTT · live view</small></div>
+    <span class="pill" id="pill" data-s="conn"><span class="dot"></span><span id="pilltxt">Starting…</span></span>
+  </div>
+  <nav class="scroll" aria-label="Sections"><a href="#readings">Readings</a><a href="#inside">Inside the ESP32</a><a href="#concepts">FreeRTOS concepts</a><a href="#talk">Send &amp; receive</a><a href="#history">History &amp; log</a><a href="#setup">Connection</a></nav>
+</header>
+
+<section class="band" id="readings"><div class="wrap">
+  <div class="shead">
+    <div><h1>Room environment, live</h1><p class="lead">What the sensors on the ESP32 measure right now, and whether each value is in a healthy range.</p></div>
+    <span class="meta" id="rmeta">No reading yet</span>
+  </div>
+  <div class="cards" id="cards"></div>
+</div></section>
+
+<section class="band" id="inside"><div class="wrap">
+  <div class="shead">
+    <div><h2>Inside the ESP32</h2><p class="lead">Each message from the board carries the list of functions that ran for it, timed in microseconds by the ESP32. The page replays that list on the map, step by step.</p></div>
+    <div class="speed"><span class="lab">Replay speed</span><span id="speed" class="row"><button type="button" data-s="2.2" aria-pressed="false">Slow</button><button type="button" data-s="1" aria-pressed="true">Normal</button><button type="button" data-s=".5" aria-pressed="false">Fast</button></span></div>
+  </div>
+  <div class="now" aria-live="polite"><span class="lab">Right now</span><span id="now">Waiting for the first reading…</span></div>
+  <div class="fig" id="ffig"><svg id="flow" role="img" aria-label="Map of tasks, queues and FreeRTOS objects inside the ESP32"></svg></div>
+  <div class="legend"><span><i class="ldot" style="background:var(--acc)"></i>Sensor data going to this computer</span><span><i class="ldot" style="background:var(--cmd)"></i>Your commands and the replies</span><span><i class="ldot" style="background:var(--sig)"></i>Interrupt, semaphore, notification, timer</span><span>Dashed box = FreeRTOS object (not a task)</span></div>
+  <div style="margin-top:18px;display:grid;gap:18px">
+    <div class="panel">
+      <div class="shead" style="margin:0 0 6px"><h2>Function trace</h2><span class="meta" id="trhead">—</span></div>
+      <table class="stack"><thead><tr><th>Time</th><th>Who</th><th>Function</th><th>What it does</th><th style="text-align:right">Took</th></tr></thead><tbody id="trace"><tr><td colspan="5" class="empty">No trace yet</td></tr></tbody></table>
+      <p class="note">Times come from the ESP32's own clock (micros), counted from the first step. "now" = still running when the message left. "—" = not timed, for example the queue copy is made before the time could be written into it.</p>
+    </div>
+    <div class="panel">
+      <h2 style="margin-bottom:12px">Tasks and memory</h2>
+      <div class="two"><dl class="stats" id="stats"></dl><div><table class="stack"><thead><tr><th>Task</th><th>State</th><th>Core</th><th>Prio</th><th style="text-align:right">Stack free</th></tr></thead><tbody id="tasks"></tbody></table></div></div>
+      <p class="note">States come from a snapshot taken every 5 s by the software timer, so no task is measuring itself. Blocked = sleeping or waiting for data, which is normal and saves CPU.</p>
+    </div>
+  </div>
+</div></section>
+
+<section class="band" id="concepts"><div class="wrap">
+  <div class="shead"><div><h2>FreeRTOS concepts used in this project</h2><p class="lead">Every concept here is real code on the board with a real job. The live part of each card updates from the ESP32's reports.</p></div></div>
+  <div class="cgrid" id="cgrid">
+    <div class="panel cc"><span class="kind">Tasks and cores</span><h3>4 tasks on 2 cores</h3>
+      <p>A <b>task</b> is a small program with its own stack. The ESP32-S3 has <b>two cores</b>, so two tasks can truly run at the same moment.</p>
+      <p class="why">Here: MqttTask and the Wi-Fi driver use core 0. SensorTask, CommandTask, ButtonTask and the button interrupt use core 1, so network work never delays sensor reading.</p>
+      <div class="live" id="k-cores"></div></div>
+    <div class="panel cc"><span class="kind">Queues</span><h3>dataQueue, cmdQueue, outQueue</h3>
+      <p>A <b>queue</b> passes copies of data safely from one task to another. The receiving task sleeps until something arrives.</p>
+      <p class="why">Here: readings go SensorTask → MqttTask, commands go MqttTask → CommandTask, and replies plus button events go back to MqttTask.</p>
+      <div class="live" id="k-queues"></div></div>
+    <div class="panel cc"><span class="kind">Mutex</span><h3>serialMutex</h3>
+      <p>A <b>mutex</b> is a lock that only one task can hold at a time. The task that takes it must give it back.</p>
+      <p class="why">Here: all four tasks print to the same Serial port. Without the mutex, their lines would mix into each other.</p>
+      <div class="live" id="k-mutex"></div></div>
+    <div class="panel cc"><span class="kind">Interrupt + binary semaphore</span><h3>buttonISR → buttonSem → ButtonTask</h3>
+      <p>An <b>interrupt</b> (ISR) must finish in microseconds, so it only gives a <b>binary semaphore</b>. ButtonTask, blocked on that semaphore, wakes up and does the real work.</p>
+      <p class="why">Here: pressing the BOOT button (GPIO 0) asks for an instant reading.</p>
+      <div class="live" id="k-sem"></div>
+      <button type="button" class="sig" id="simbtn">Simulate a BOOT press (demo only)</button></div>
+    <div class="panel cc"><span class="kind">Task notifications</span><h3>The lightest way to wake one task</h3>
+      <p>A <b>task notification</b> wakes one specific task directly, with no queue or semaphore object in between.</p>
+      <p class="why">Here: ButtonTask notifies SensorTask ("read now"), and the timer notifies MqttTask ("send the report").</p>
+      <div class="live" id="k-ntf"></div></div>
+    <div class="panel cc"><span class="kind">Event group</span><h3>netEvents</h3>
+      <p>An <b>event group</b> is a set of on/off flags (bits) that tasks can set, clear and wait for.</p>
+      <p class="why">Here: MqttTask sets WIFI_OK and MQTT_OK. SensorTask waits for WIFI_OK before it starts reading.</p>
+      <div class="live" id="k-ev"></div></div>
+    <div class="panel cc"><span class="kind">Software timer</span><h3>sysTimer, every 5 s</h3>
+      <p>A <b>software timer</b> runs a callback function from the FreeRTOS timer task, so it needs no task of its own.</p>
+      <p class="why">Here: it takes a snapshot of all tasks and the CPU load, then notifies MqttTask to send the system report.</p>
+      <div class="live" id="k-tmr"></div></div>
+    <div class="panel cc"><span class="kind">Priorities and pre-emption</span><h3>Who gets the CPU first</h3>
+      <p>Each task has a <b>priority</b>. When a higher-priority task becomes ready, FreeRTOS <b>pre-empts</b> (pauses) the lower one on that core straight away.</p>
+      <p class="why">Here: ButtonTask has the highest priority, so a button press is handled at once, ahead of SensorTask and CommandTask on core 1.</p>
+      <div class="live" id="k-prio"></div></div>
+    <div class="panel cc"><span class="kind">Stack and heap memory</span><h3>Every task has its own stack</h3>
+      <p>Each task gets a fixed <b>stack</b> when it is created. The <b>high-water mark</b> shows the smallest amount that was ever left free. Near zero means the stack could overflow.</p>
+      <p class="why">Here: the sizes were chosen so every task keeps a safe margin. Queues, the mutex and the timer are allocated from the <b>heap</b>.</p>
+      <div class="live" id="k-mem"></div></div>
+  </div>
+</div></section>
+
+<section class="band" id="talk"><div class="wrap two">
+  <div class="panel">
+    <h2>Send a message to the ESP32</h2>
+    <p class="lead" style="font-size:14px">Goes to topic <code id="cmdtopic">…/cmd</code>. MqttTask receives it, CommandTask runs it and sends back a reply through outQueue.</p>
+    <form id="msgform" class="ctl"><label for="msg">Text message (printed on the Serial Monitor, using serialMutex)</label>
+      <div class="msgrow"><input id="msg" maxlength="120" placeholder="Hello from the website" autocomplete="off"><button class="send" type="submit">Send</button></div></form>
+    <div class="ctl"><span class="lab">On-board RGB LED</span><div class="row" id="leds"></div></div>
+    <div class="ctl"><span class="lab">SensorTask reads the sensors every</span><div class="row" id="ints"><button type="button" data-ms="1000">1 s</button><button type="button" data-ms="2000">2 s</button><button type="button" data-ms="5000">5 s</button></div></div>
+    <div class="ctl"><span class="lab">Tests</span><div class="row"><button type="button" id="ping">Ping: measure delay</button><button type="button" id="restart" class="danger">Restart ESP32</button></div></div>
+    <h3 style="margin-top:18px">Sent messages and replies</h3>
+    <ol class="cmds" id="cmds"><li class="empty">Nothing sent yet</li></ol>
+  </div>
+  <div class="panel">
+    <div class="shead" style="margin:0"><h2>Data received by this computer</h2><span class="meta" id="rawstat">0 messages</span></div>
+    <div class="rawbar" id="rawf"><button type="button" data-f="all" aria-pressed="true">All</button><button type="button" data-f="telemetry" aria-pressed="false">Readings</button><button type="button" data-f="system" aria-pressed="false">System</button><button type="button" data-f="ack" aria-pressed="false">Replies</button><button type="button" data-f="button" aria-pressed="false">Button</button><button type="button" data-f="sent" aria-pressed="false">Sent</button><button type="button" data-f="event" aria-pressed="false">Events</button><button type="button" id="pause" aria-pressed="false">Pause</button></div>
+    <ol class="raw" id="raw" data-f="all"></ol>
+    <p class="note">Each line is one MQTT message exactly as it arrived. Tap a line to see the full JSON.</p>
+  </div>
+</div></section>
+
+<section class="band" id="history"><div class="wrap two">
+  <div class="panel">
+    <h2>History <span class="lab" id="hunit"></span></h2>
+    <div class="tabs" id="tabs"></div>
+    <div class="hfig"><svg id="hsvg"></svg></div>
+  </div>
+  <div class="panel"><h2 style="margin-bottom:8px">Event log</h2><ol class="log" id="log"></ol></div>
+</div></section>
+
+<section class="band" id="setup"><div class="wrap two">
+  <div class="panel">
+    <h2>Connection</h2>
+    <form id="cform" style="margin-top:12px">
+      <label for="url">Broker WebSocket URL</label>
+      <input id="url" class="mono" value="wss://broker.hivemq.com:8884/mqtt" autocomplete="off" spellcheck="false" style="margin-bottom:12px">
+      <label for="pre">Topic prefix (same as PREFIX in the firmware)</label>
+      <input id="pre" class="mono" value="iitp/priyanshi/envstation" autocomplete="off" spellcheck="false" style="margin-bottom:12px">
+      <div class="row"><button class="pri" id="connect" type="submit">Connect live</button><button id="demo" type="button">Use demo data</button></div>
+    </form>
+    <p class="note">Until you connect, everything on this page runs on demo data made up in your browser, in the same format as the real firmware. The public HiveMQ broker is open to anyone: keep the prefix unique and send nothing private.</p>
+  </div>
+  <div class="panel">
+    <div class="shead" style="margin:0"><h2>Message format</h2><button id="copy" type="button">Copy</button></div>
+<pre class="mono" id="fmt">Every trace step: [function, who, start µs, µs taken]
+ who: S SensorTask, M MqttTask, C CommandTask, K ButtonTask, I interrupt
+ taken: -1 = still running, -2 = not timed
+
+&lt;prefix&gt;/telemetry   {"seq":12,"why":"timer","t":27.4,"h":58,"gas":412,
+                     "lux":530,"p":1006.9,"tr":[…]}
+&lt;prefix&gt;/system      every 5 s, from sysTimer: heap, uptime, rssi, interval,
+                     q/qmax, cq/cqmax, oq/oqmax, cpu:[core0 %, core1 %],
+                     mutex{holder,takes,waits,maxwait}, sem{isr,taken,presses,lat},
+                     ev{wifi,mqtt}, tmr{period,fires,active}, ntf{sensor,mqtt}, tasks[…]
+&lt;prefix&gt;/button      {"n":3,"lat":42,"tr":[…]}   after each BOOT press
+&lt;prefix&gt;/cmd         computer → ESP32: {"id":5,"cmd":"led","color":"#ff0000"}
+                     also "msg"+"text", "interval"+"ms", "ping", "restart"
+&lt;prefix&gt;/ack         {"id":5,"cmd":"led","ok":true,"reply":"…","tr":[…]}
+&lt;prefix&gt;/event       {"e":"wifi_reconnect","msg":"…","lvl":"warn"}
+&lt;prefix&gt;/status      online / offline (retained, last will)</pre>
+  </div>
+</div></section>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+{
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const clk=t=>new Date(t).toLocaleTimeString([],{hour12:false});
+const us=v=>v==null||isNaN(v)||v===-2?'—':v===-1?'now':v<1000?Math.round(v)+' µs':v<10000?(v/1000).toFixed(2)+' ms':v<1e6?(v/1000).toFixed(1)+' ms':(v/1e6).toFixed(2)+' s';
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const rnd=Math.random;
+
+/* ---------- meanings ---------- */
+const M=[
+ {k:'t',n:'Temperature',u:'°C',d:1,lv:v=>v<18?['mid','Cold','Below a comfortable room temperature']:v<=28?['good','Comfortable','Normal room temperature']:v<=35?['mid','Warm','Warmer than comfortable']:['bad','Hot','Too hot for comfort']},
+ {k:'h',n:'Humidity',u:'%',d:0,lv:v=>v<30?['mid','Dry','Air is drier than ideal']:v<=60?['good','Comfortable','Healthy indoor humidity']:v<=75?['mid','Humid','A bit damp, mould can grow']:['bad','Very humid','Too damp for indoors']},
+ {k:'gas',n:'Air quality (MQ-135)',u:'ppm',d:0,lv:v=>v<=600?['good','Good air','Fresh, well-ventilated air']:v<=1000?['mid','Moderate','Getting stuffy, open a window']:['bad','Poor air','Ventilate the room now']},
+ {k:'lux',n:'Light',u:'lux',d:0,lv:v=>v<50?['mid','Dark','Too dark to read']:v<300?['good','Dim','Soft room light']:v<=1000?['good','Bright room','Good light for work']:['mid','Very bright','Direct sunlight level']},
+ {k:'p',n:'Air pressure',u:'hPa',d:1,lv:v=>v>=980&&v<=1040?['good','Normal','Normal air pressure']:['mid','Unusual','Outside the usual range']}];
+const TN={S:'SensorTask',M:'MqttTask',C:'CommandTask',K:'ButtonTask',I:'Interrupt (ISR)',W:'This computer'};
+const CORE={S:1,M:0,C:1,K:1,I:1};
+const TNODE={S:1,M:3,C:10,K:7,I:6};
+const FN={readTemperature:'Reads the temperature sensor',readHumidity:'Reads the humidity sensor',readGas:'Reads the MQ-135 gas sensor',readLight:'Reads the light sensor',readPressure:'Reads the pressure sensor',
+ 'xSemaphoreTake(serialMutex)':'Locks serialMutex so no other task can print now','Serial.println':'Prints a log line on the Serial Monitor','xSemaphoreGive(serialMutex)':'Unlocks serialMutex for the other tasks',
+ 'xQueueSend(dataQueue)':'Copies the reading into dataQueue','xQueueReceive(dataQueue)':'Takes the reading out of dataQueue',buildJson:'Packs the values and this trace into JSON text','mqtt.publish':'Sends the JSON to the MQTT broker over Wi-Fi',
+ mqttCallback:'Receives your message inside mqtt.loop() and puts it in cmdQueue','xQueueReceive(cmdQueue)':'Takes your command out of cmdQueue','C:xQueueSend(outQueue)':'Puts the reply into outQueue for MqttTask to send','K:xQueueSend(outQueue)':'Puts the button event into outQueue for MqttTask to send',
+ setLed:'Changes the colour of the on-board RGB LED',setInterval:'Changes how often SensorTask reads the sensors',showMessage:'Prints your text, using serialMutex',ping:'Answers at once so the delay can be measured','ESP.restart':'Restarts the ESP32',deserializeJson:'Tries to read your JSON command',handleCommand:'Looks up the command',
+ buttonISR:'Interrupt routine: runs the instant GPIO 0 goes LOW',xSemaphoreGiveFromISR:'Gives buttonSem from inside the interrupt','xSemaphoreTake(buttonSem)':'ButtonTask wakes up on buttonSem (time = delay after the interrupt)','vTaskDelay(debounce)':'Waits 50 ms so the button bounce settles','xTaskNotifyGive(SensorTask)':'Sends a task notification: SensorTask, read now'};
+const STN={R:'Running',Y:'Ready',B:'Blocked',S:'Suspended',D:'Deleted'};
+const LEDS=[['Red','#ff0000'],['Green','#00ff00'],['Blue','#0000ff'],['White','#ffffff'],['Off','#000000']];
+const S={mode:'demo',hist:{},tasks:{},sys:null,sel:'t',lastMsg:0,connAt:0,client:null,pre:'',dropped:0,lastSeq:null,recvAt:0,pending:null,replaying:false,spd:1,led:'#000000',cmdId:0,cmds:{},paused:false,rawN:0,rawB:0,rawT:[],mutexTmp:null,lastBtn:null,sysAt:0};
+const core=t=>S.tasks[TN[t]]?.c??CORE[t];
+const fnName=f=>f.includes('(')?f:f+'()';
+function desc(r){if(r.task==='W')return`MQTT.js in this browser received the message at ${clk(r.at)}`;
+  if(r.fn==='ulTaskNotifyTake')return r.why==='button'?`Woken early by a task notification from ButtonTask (slept ${us(r.d)})`:`Slept ${us(r.d)} until the next scheduled reading, then woke up`;
+  let s=FN[r.task+':'+r.fn]||FN[r.fn]||'';if(r.fn==='xSemaphoreTake(serialMutex)'&&r.d>100)s+=` (had to wait ${us(r.d)}: another task held it)`;return s}
+const who=t=>TN[t]||t;
+const say=r=>`<b>${esc(who(r.task))}</b>${r.task!=='W'?' on core '+core(r.task):''} runs <b class="mono">${esc(fnName(r.fn))}</b>: ${esc(desc(r))}`;
+
+/* ---------- status + log ---------- */
+function setPill(s,t){$('#pill').dataset.s=s;$('#pilltxt').textContent=t}
+function log(msg,lvl){const li=document.createElement('li');if(lvl)li.className=lvl;li.innerHTML=`<time class="mono">${clk(Date.now())}</time><span>${esc(msg)}</span>`;const ol=$('#log');ol.prepend(li);while(ol.children.length>80)ol.lastChild.remove()}
+
+/* ---------- readings ---------- */
+$('#cards').innerHTML=M.map(m=>`<div class="card" id="c-${m.k}"><div class="ctop"><span class="lab">${m.n}</span><span class="chip">No data</span></div><div class="val"><b>—</b><span>${m.u}</span></div><div class="hint">Waiting for the sensor</div><svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none"><polyline fill="none" stroke="var(--acc)" stroke-width="2" vector-effect="non-scaling-stroke" points=""/></svg><div class="mma">min — · avg — · max —</div></div>`).join('');
+function updateCards(){M.forEach(m=>{const a=S.hist[m.k]||[],c=$('#c-'+m.k),ch=c.querySelector('.chip');
+  if(!a.length){c.querySelector('b').textContent='—';ch.className='chip';ch.textContent='No data';c.querySelector('.hint').textContent='Waiting for the sensor';c.querySelector('polyline').setAttribute('points','');c.querySelector('.mma').textContent='min — · avg — · max —';return}
+  const v=a[a.length-1].v,[cls,lab,hint]=m.lv(v),vals=a.map(p=>p.v),lo=Math.min(...vals),hi=Math.max(...vals),avg=vals.reduce((x,y)=>x+y,0)/vals.length;
+  c.querySelector('b').textContent=v.toFixed(m.d);ch.className='chip '+cls;ch.textContent=lab;c.querySelector('.hint').textContent=hint;
+  c.querySelector('.mma').textContent=`min ${lo.toFixed(m.d)} · avg ${avg.toFixed(m.d)} · max ${hi.toFixed(m.d)} (last ${a.length})`;
+  const sp=hi-lo||1;c.querySelector('polyline').setAttribute('points',a.map((p,i)=>`${(i/Math.max(a.length-1,1)*100).toFixed(2)},${(31-(p.v-lo)/sp*28).toFixed(2)}`).join(' '))})}
+function updMeta(){if(S.lastSeq==null){$('#rmeta').textContent='No reading yet';return}const ago=Math.max(0,Math.round((Date.now()-S.recvAt)/1000));$('#rmeta').textContent=`Reading #${S.lastSeq} · received ${clk(S.recvAt)} (${ago} s ago)`}
+
+/* ---------- history ---------- */
+const hs=$('#hsvg');
+$('#tabs').innerHTML=M.map(m=>`<button type="button" data-k="${m.k}" aria-pressed="${m.k===S.sel}">${m.n.replace(/ \(.*\)/,'')}</button>`).join('');
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;S.sel=b.dataset.k;$$('#tabs button').forEach(x=>x.setAttribute('aria-pressed',x===b));drawHist()});
+function drawHist(){const W=hs.clientWidth,H=hs.clientHeight;if(!W)return;const m=M.find(x=>x.k===S.sel),a=S.hist[m.k]||[];$('#hunit').textContent=m.u;
+  if(a.length<2){hs.innerHTML=`<text x="${W/2}" y="${H/2}" text-anchor="middle" class="ax">Waiting for at least two readings</text>`;return}
+  const L=W<520?44:56,R=14,T=12,B=28;let lo=Math.min(...a.map(p=>p.v)),hi=Math.max(...a.map(p=>p.v));if(hi-lo<1e-6){hi+=1;lo-=1}const pad=(hi-lo)*.12;lo-=pad;hi+=pad;
+  const t0=a[0].ts,t1=a[a.length-1].ts,x=t=>L+(W-L-R)*(t1===t0?1:(t-t0)/(t1-t0)),y=v=>T+(H-T-B)*(1-(v-lo)/(hi-lo));
+  const dd=Math.max(0,m.d,Math.ceil(-Math.log10((hi-lo)/3)));let g='';
+  for(let i=0;i<=3;i++){const v=lo+(hi-lo)*i/3;g+=`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end" class="ax">${v.toFixed(dd)}</text>`}
+  const l=a[a.length-1];
+  hs.innerHTML=g+`<polyline points="${a.map(p=>x(p.ts).toFixed(1)+','+y(p.v).toFixed(1)).join(' ')}" fill="none" stroke="var(--acc)" stroke-width="2.25" stroke-linejoin="round"/><circle cx="${x(l.ts)}" cy="${y(l.v)}" r="4.5" fill="var(--acc)"/><text x="${L}" y="${H-6}" class="ax">${clk(t0)}</text><text x="${W-R}" y="${H-6}" text-anchor="end" class="ax">${clk(t1)}</text>`}
+const hro=new ResizeObserver(drawHist);hro.observe(hs);
+
+/* ---------- map of the board ---------- */
+const N=[
+ {name:'Sensors',sub:'wired to the board',c:0,r:0},{name:'SensorTask',sub:'task',c:1,r:0,task:'S'},{name:'dataQueue',sub:'queue',c:2,r:0,q:'q',obj:1},{name:'MqttTask',sub:'task',c:3,r:0,task:'M'},{name:'MQTT broker',sub:'on the internet',c:4,r:0},{name:'This computer',sub:'your browser',c:5,r:0},
+ {name:'BOOT button',sub:'GPIO 0 interrupt',c:0,r:1},{name:'ButtonTask',sub:'task',c:1,r:1,task:'K'},{name:'outQueue',sub:'queue',c:2,r:1,q:'oq',obj:1},
+ {name:'LED + Serial',sub:'on the board',c:0,r:2},{name:'CommandTask',sub:'task',c:1,r:2,task:'C'},{name:'cmdQueue',sub:'queue',c:3,r:1,q:'cq',obj:1},
+ {name:'serialMutex',sub:'mutex',c:4,r:1,obj:1},{name:'sysTimer',sub:'software timer',c:4,r:2,obj:1},{name:'netEvents',sub:'event group',c:5,r:1,obj:1},{name:'CPU load',sub:'idle hooks',c:5,r:2,obj:1}];
+const EDGES=[['0-1',0,1,0,''],['1-2',1,2,0,''],['2-3',2,3,0,''],['3-4',3,4,-1,''],['4-5',4,5,-1,''],
+ ['c5-4',5,4,1,'c'],['c4-3',4,3,1,'c'],['3-11',3,11,0,'c'],['11-10',11,10,0,'c'],['10-9',10,9,0,'c'],['10-8',10,8,0,'c'],['8-3',8,3,0,'c'],
+ ['6-7',6,7,0,'n'],['7-1',7,1,0,'n'],['7-8',7,8,0,'n'],['13-3',13,3,0,'n']];
+const ff=$('#ffig'),fsvg=$('#flow');let E={},nodes=[],vert=false;const HOT={pkt:Array(N.length).fill(0),cpk:Array(N.length).fill(0),spk:Array(N.length).fill(0)};const RUN=[];
+function clip(b,dx,dy){const tx=dx?b.w/2/Math.abs(dx):1e9,ty=dy?b.h/2/Math.abs(dy):1e9,t=Math.min(tx,ty);return[b.cx+dx*t,b.cy+dy*t]}
+function drawFlow(){const W=ff.clientWidth;if(!W)return;vert=W<860;let G;
+  if(!vert){const slot=(W-8)/6;G={A0:4,slot,la:Math.min(slot*.84,186),lb:98,B0:34,gB:46};G.H=G.B0+3*G.lb+2*G.gB+14}
+  else{const colW=(W-8)/3,lb=Math.min(colW*.94,220);G={A0:34,slot:94,la:76,lb,B0:4+(colW-lb)/2,gB:colW-lb};G.H=G.A0+6*G.slot+6}
+  ff.style.height=G.H+'px';
+  const ca=c=>G.A0+G.slot*(c+.5),cb=r=>G.B0+G.lb/2+r*(G.lb+G.gB),P=(a,b)=>vert?[b,a]:[a,b];
+  const B=N.map(n=>{const[cx,cy]=P(ca(n.c),cb(n.r)),w=vert?G.lb:G.la,h=vert?G.la:G.lb;return{x:cx-w/2,y:cy-h/2,w,h,cx,cy}});
+  E={};EDGES.forEach(([k,a,b,o])=>{const A=B[a],Z=B[b];let dx=Z.cx-A.cx,dy=Z.cy-A.cy;const L=Math.hypot(dx,dy);dx/=L;dy/=L;const[x1,y1]=clip(A,dx,dy),[x2,y2]=clip(Z,-dx,-dy);const s=a<b?1:-1,px=o?-dy*s*o*11:0,py=o?dx*s*o*11:0;E[k]={x1:x1+px,y1:y1+py,x2:x2+px,y2:y2+py}});
+  const pd=vert?Math.max(2,Math.min(10,G.gB/2-1)):10,a1=ca(0)-G.la/2-pd,a2=ca(3)+G.la/2+pd,a3=ca(5)+G.la/2+pd,b1=cb(0)-G.lb/2-pd,bj=cb(1)-G.lb/2-G.gB/2,b2=cb(2)+G.lb/2+pd;
+  const poly=[[a1,b1],[a2,b1],[a2,bj],[a3,bj],[a3,b2],[a1,b2]].map(p=>P(...p));const mx=Math.min(...poly.map(p=>p[0])),my=Math.min(...poly.map(p=>p[1]));
+  const fz=vert&&W<520?13:vert?14:W>1100?15:14;
+  let s=`<defs>${['ar','arc','ars'].map((id,i)=>`<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="${['var(--mute)','var(--cmd)','var(--sig)'][i]}"/></marker>`).join('')}</defs>`;
+  s+=`<polygon class="encl" points="${poly.map(p=>p.join(',')).join(' ')}"/><text class="encl-t" x="${mx+14}" y="${my-7}">ESP32-S3 board</text>`;
+  s+=EDGES.map(([k,,,,c])=>{const e=E[k];return`<line class="edge ${c}" x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" marker-end="url(#${c==='c'?'arc':c==='n'?'ars':'ar'})"/>`}).join('');
+  s+=B.map((b,i)=>{const n=N[i];let extra='';
+    if(n.q&&!vert){const cnt=n.q==='q'?10:n.q==='oq'?6:5,sw=(b.w-24)/cnt;extra=`<g id="qs-${i}">${Array.from({length:cnt},(_,k)=>`<rect class="slot" x="${b.x+12+k*sw+1}" y="${b.y+50}" width="${sw-3}" height="12" rx="2"/>`).join('')}</g>`}
+    if(i===9)extra=`<circle id="ledsw" cx="${b.x+b.w-(fz<14?8:14)}" cy="${b.y+(fz<14?8:16)}" r="${fz<14?4.5:6.5}" stroke="var(--line)" fill="transparent"/>`;
+    return`<g class="node${n.obj?' obj':''}"><rect class="box" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="10"/><text class="nname" x="${b.cx}" y="${b.y+22}" text-anchor="middle" font-size="${fz}">${n.name}</text><text class="nsub" id="sub-${i}" x="${b.cx}" y="${b.y+39}" text-anchor="middle">${n.sub}</text>${extra}<text class="nst" id="st-${i}" x="${b.cx}" y="${b.y+b.h-11}" text-anchor="middle"></text></g>`}).join('');
+  s+='<g id="pk"></g>';fsvg.innerHTML=s;nodes=[...fsvg.querySelectorAll('.node')];nodeState();const g=$('#pk');RUN.forEach(r=>g.appendChild(r.dot))}
+const fro=new ResizeObserver(drawFlow);fro.observe(ff);
+function setSt(i,txt,cls){const st=$('#st-'+i);if(!st)return;st.textContent=txt;st.setAttribute('class','nst'+(cls?' '+cls:''))}
+function nodeState(){if(!nodes.length)return;const y=S.sys,short=vert&&ff.clientWidth<520;
+  N.forEach((n,i)=>{const sb=$('#sub-'+i);
+    if(n.task){const t=S.tasks[TN[n.task]];if(t){setSt(i,'● '+(STN[t.s]||t.s),t.s);sb.textContent=`core ${t.c??'?'} · prio ${t.pr??'?'}`}else{setSt(i,'');sb.textContent='task'}}
+    if(n.q){const q=y?(y[n.q]??0):0,mx=y?(y[n.q+'max']??0):0;setSt(i,y?`${q} of ${mx} waiting`:'');$$(`#qs-${i} rect`).forEach((r,k)=>r.setAttribute('class','slot'+(k<q?(n.q==='q'?' on':' onc'):'')))}});
+  setSt(5,S.mode==='demo'?'● Demo data':'● Live',S.mode==='live'?'on':'');
+  if(S.mode==='live'){try{$('#sub-4').textContent=new URL($('#url').value).hostname.slice(0,22)}catch(e){}}else $('#sub-4').textContent='on the internet';
+  const l=LEDS.find(x=>x[1]===S.led.toLowerCase());$('#ledsw')?.setAttribute('fill',S.led==='#000000'?'transparent':S.led);setSt(9,'LED '+(l?l[0].toLowerCase():S.led));
+  setSt(6,y?.sem?`${y.sem.presses} presses`:'');
+  const hd=h=>short?'held':'held by '+h;if(S.mutexTmp)setSt(12,short?'held':S.mutexTmp,'held');else if(y?.mutex)setSt(12,y.mutex.holder?hd(y.mutex.holder):'free',y.mutex.holder?'held':'on');else setSt(12,'');
+  setSt(13,y?.tmr?(short?nextTmr():`every ${y.tmr.period/1000} s · ${nextTmr()}`):'');
+  if(y?.ev){const st=$('#st-14');st.setAttribute('class','nst');st.innerHTML=`<tspan class="${y.ev.wifi?'on':''}" style="fill:${y.ev.wifi?'var(--ok)':'var(--bad)'}">WIFI</tspan> · <tspan style="fill:${y.ev.mqtt?'var(--ok)':'var(--bad)'}">MQTT</tspan>`}else setSt(14,'');
+  setSt(15,y?.cpu?(short?`${y.cpu[0]}% · ${y.cpu[1]}%`:`core0 ${y.cpu[0]}% · core1 ${y.cpu[1]}%`):'')}
+function nextTmr(){if(!S.sysAt||!S.sys?.tmr)return'';const left=Math.max(0,Math.ceil((S.sysAt+S.sys.tmr.period-Date.now())/1000));return`next in ${left} s`}
+function mkDot(cls){const c=document.createElementNS('http://www.w3.org/2000/svg','circle');c.setAttribute('r','0');c.setAttribute('class',cls);return c}
+function run(steps,cls,onStep,onEnd){if(!steps.length){onEnd&&onEnd();return}const r={steps,i:0,st:performance.now(),dot:mkDot(cls),cls,onStep,onEnd};$('#pk')?.appendChild(r.dot);RUN.push(r);onStep&&onStep(steps[0])}
+function frame(now){for(let j=RUN.length-1;j>=0;j--){const r=RUN[j];let s=r.steps[r.i];
+    while(s&&now-r.st>=s.dur*S.spd){r.st+=s.dur*S.spd;r.i++;s=r.steps[r.i];if(s&&r.onStep)r.onStep(s)}
+    if(!s){r.dot.remove();RUN.splice(j,1);r.onEnd&&r.onEnd();continue}
+    if(s.edge&&E[s.edge]){const e=E[s.edge],f=Math.min(1,(now-r.st)/(s.dur*S.spd));if(!reduce){r.dot.setAttribute('cx',e.x1+(e.x2-e.x1)*f);r.dot.setAttribute('cy',e.y1+(e.y2-e.y1)*f);r.dot.setAttribute('r','7')}}
+    else r.dot.setAttribute('r','0');
+    (s.nodes||[]).forEach(n=>HOT[r.cls][n]=now+90)}
+  nodes.forEach((n,i)=>{const a=HOT.pkt[i]>now,b=HOT.cpk[i]>now,c=HOT.spk[i]>now;n.classList.toggle('hot',a);n.classList.toggle('hotc',b&&!a);n.classList.toggle('hots',c&&!a&&!b)});requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+$('#speed').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;S.spd=+b.dataset.s;$$('#speed button').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+const EM=380,D=u=>Math.min(1300,280+Math.max(0,u>0?u:0)/1000*3);
+function parseTr(tr,extra){return(Array.isArray(tr)?tr:[]).map(a=>({fn:String(a[0]),task:String(a[1]),t:+a[2],d:+a[3],...extra}))}
+
+/* ---------- telemetry replay + trace table ---------- */
+function buildAnim(o){const tr=parseTr(o.tr,{why:o.why});const t0=tr.length?tr[0].t:0,rows=tr.map(s=>({...s,rel:(s.t-t0)>>>0}));rows.push({fn:'onMessage',task:'W',rel:null,d:null,at:Date.now()});
+  const steps=[];let lastRead=-1;
+  rows.forEach((r,i)=>{const f=r.fn,tn=TNODE[r.task]??1,txt=say(r);
+    if(r.task==='W'){steps.push({edge:'4-5',dur:EM,row:i-1});steps.push({nodes:[5],dur:700,row:i,text:txt});return}
+    if(f==='ulTaskNotifyTake'){steps.push({nodes:[1],dur:520,row:i,text:txt});return}
+    if(/^read/.test(f)){steps.push({nodes:[0,1],dur:D(r.d),row:i,text:txt});lastRead=i;return}
+    if(f==='xSemaphoreTake(serialMutex)'){if(r.task==='S'&&lastRead>=0){steps.push({edge:'0-1',dur:EM,row:lastRead});lastRead=-1}steps.push({nodes:[tn,12],dur:D(r.d),row:i,text:txt,mutex:'held by '+who(r.task)});return}
+    if(f==='Serial.println'){steps.push({nodes:[tn,12,9],dur:D(r.d),row:i,text:txt});return}
+    if(f==='xSemaphoreGive(serialMutex)'){steps.push({nodes:[tn,12],dur:D(r.d),row:i,text:txt,mutex:''});return}
+    if(f==='xQueueSend(dataQueue)'){steps.push({nodes:[1],dur:D(0),row:i,text:txt});steps.push({edge:'1-2',dur:EM,row:i});const nx=rows[i+1],w=nx&&nx.rel!=null?nx.rel-r.rel:0;steps.push({nodes:[2],dur:D(w),row:i,text:`The reading waits in <b class="mono">dataQueue</b> for ${us(w)} until MqttTask takes it`});return}
+    if(f==='xQueueReceive(dataQueue)'){steps.push({edge:'2-3',dur:EM,row:i,text:txt});steps.push({nodes:[3],dur:D(0),row:i});return}
+    if(f==='mqtt.publish'){steps.push({nodes:[3],dur:D(0),row:i,text:txt});steps.push({edge:'3-4',dur:EM,row:i});steps.push({nodes:[4],dur:D(0),row:i,text:'The <b>MQTT broker</b> passes the message on to everyone listening to this topic, including this page'});return}
+    steps.push({nodes:[tn],dur:D(r.d),row:i,text:txt})});
+  if(!tr.length)steps.unshift({nodes:[0,1,2,3],dur:700,row:0,text:'This message has no function trace. Flash the latest firmware to see every step.'});
+  return{rows,steps}}
+function renderTrace(rows,o){$('#trhead').textContent=`Reading #${o.seq??'?'} · ${o.why==='button'?'asked for by the BOOT button':'scheduled'} · ${rows.length} steps`;
+  $('#trace').innerHTML=rows.map(r=>`<tr><td class="n mono">${r.rel==null?clk(r.at):'+'+us(r.rel).replace('—','0 µs')}</td><td>${esc(who(r.task))}${r.task!=='W'?`<small>core ${core(r.task)}</small>`:''}</td><td class="mono fn">${esc(r.task==='W'?'onMessage':fnName(r.fn))}</td><td>${esc(desc(r))}</td><td class="n mono">${r.task==='W'?'—':us(r.d)}</td></tr>`).join('')}
+function hlRow(i){$$('#trace tr').forEach((t,k)=>t.classList.toggle('on',k===i))}
+function idle(){const iv=(S.sys?.interval??2000)/1000;return`Waiting for the next reading. <b>SensorTask</b> sleeps in <b class="mono">ulTaskNotifyTake()</b> for up to ${iv} s (a BOOT press can wake it early). <b>MqttTask</b> runs <b class="mono">mqtt.loop()</b> and waits on dataQueue. <b>CommandTask</b> and <b>ButtonTask</b> are blocked, waiting for work.`}
+function startReplay(o){const a=buildAnim(o);renderTrace(a.rows,o);S.replaying=true;
+  run(a.steps,'pkt',s=>{if(s.row!=null)hlRow(s.row);if(s.text)$('#now').innerHTML=s.text;if('mutex'in s){S.mutexTmp=s.mutex||null;nodeState()}},()=>{S.replaying=false;S.mutexTmp=null;nodeState();hlRow(-1);$('#now').innerHTML=idle();if(S.pending){const p=S.pending;S.pending=null;startReplay(p)}})}
+
+/* ---------- system + concept cards ---------- */
+const kv=(a,b)=>`<div class="kv"><span>${a}</span><span>${b}</span></div>`;
+const meter=(p,c)=>`<div class="meter ${c||''}"><i style="width:${Math.max(0,Math.min(100,p))}%"></i></div>`;
+function renderSys(){const o=S.sys;
+  if(!o){$('#stats').innerHTML='<div><dt>Free heap</dt><dd>—</dd></div><div><dt>Uptime</dt><dd>—</dd></div><div><dt>Wi-Fi signal</dt><dd>—</dd></div>';$('#tasks').innerHTML='<tr><td colspan="5" class="empty">No task report yet (arrives every 5 s)</td></tr>';$$('#cgrid .live').forEach(x=>x.innerHTML='<span class="empty">Waiting for the first system report…</span>');return}
+  const up=o.uptime|0,r=o.rssi,q=r==null?'':r>-60?'strong':r>-70?'good':r>-80?'weak':'very weak';
+  const st=[['Free heap',o.heap!=null?(o.heap/1024).toFixed(0)+' KB':'—'],['Lowest free heap',o.minheap!=null?(o.minheap/1024).toFixed(0)+' KB':'—'],['Uptime',`${Math.floor(up/3600)}h ${String(Math.floor(up%3600/60)).padStart(2,'0')}m ${String(up%60).padStart(2,'0')}s`],['Wi-Fi signal',r!=null?`${r} dBm, ${q}`:'—'],['Reads every',o.interval?(o.interval/1000)+' s':'—'],['Dropped readings',o.dropped??0]];
+  $('#stats').innerHTML=st.map(([a,b])=>`<div><dt>${a}</dt><dd>${esc(b)}</dd></div>`).join('');
+  const ts=Object.values(S.tasks);
+  $('#tasks').innerHTML=ts.length?ts.map(t=>`<tr><td class="fn">${esc(t.n)}</td><td class="st ${esc(t.s)}">${esc(STN[t.s]||t.s)}</td><td>${esc(t.c??'—')}</td><td>${esc(t.pr??'—')}</td><td class="n">${t.st!=null?esc(t.st)+' B':'—'}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No tasks in the report</td></tr>';
+  $$('#ints button').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.ms===o.interval)));
+  const byCore=c=>ts.filter(t=>t.c===c).map(t=>t.n).join(', ')||'—',cpu=o.cpu||[0,0];
+  $('#k-cores').innerHTML=kv('Core 0 load (approx.)',cpu[0]+'%')+meter(cpu[0])+kv('Core 0 runs',esc(byCore(0))+' + Wi-Fi')+kv('Core 1 load (approx.)',cpu[1]+'%')+meter(cpu[1])+kv('Core 1 runs',esc(byCore(1))+' + button ISR');
+  const qq=(n,a,b,c)=>kv(n,`${o[a]??0} of ${o[b]??0} waiting`)+meter((o[a]??0)/(o[b]||1)*100,c);
+  $('#k-queues').innerHTML=qq('dataQueue','q','qmax')+qq('cmdQueue','cq','cqmax','c')+qq('outQueue','oq','oqmax','c')+kv('Readings dropped (queue full)',o.dropped??0);
+  const mx=o.mutex||{};$('#k-mutex').innerHTML=kv('State at last snapshot',mx.holder?`held by ${esc(mx.holder)}`:'free')+kv('Times taken',mx.takes??'—')+kv('Times a task had to wait',mx.waits??'—')+kv('Longest wait',us(mx.maxwait));
+  const sm=o.sem||{};$('#k-sem').innerHTML=kv('Interrupts fired (incl. bounce)',sm.isr??'—')+kv('Semaphore taken by ButtonTask',sm.taken??'—')+kv('Real presses after debounce',sm.presses??'—')+kv('Interrupt → task wake-up',sm.presses?us(sm.lat):'—');
+  const nt=o.ntf||{};$('#k-ntf').innerHTML=kv('ButtonTask → SensorTask',nt.sensor??'—')+kv('sysTimer → MqttTask',nt.mqtt??'—');
+  const ev=o.ev||{};$('#k-ev').innerHTML=`<div class="row" style="gap:18px"><span class="lamp ${ev.wifi?'on':''}">WIFI_OK (bit 0)</span><span class="lamp ${ev.mqtt?'on':''}">MQTT_OK (bit 1)</span></div>`;
+  const SZ={SensorTask:5120,MqttTask:10240,CommandTask:8192,ButtonTask:6144};
+  $('#k-prio').innerHTML=[...ts].sort((x,y)=>(y.pr??0)-(x.pr??0)).map(t=>kv(`${esc(t.n)} (core ${t.c})`,'priority '+esc(t.pr))).join('');
+  $('#k-mem').innerHTML=ts.map(t=>kv(esc(t.n),`${esc(t.st)} B of ${SZ[t.n]??'?'} B never used`)+meter(SZ[t.n]?(1-t.st/SZ[t.n])*100:0,'s')).join('')+kv('Free heap now / lowest',`${(o.heap/1024).toFixed(0)} KB / ${(o.minheap/1024).toFixed(0)} KB`);
+  const tm=o.tmr||{};$('#k-tmr').innerHTML=kv('Period',tm.period?tm.period/1000+' s':'—')+kv('Times fired',tm.fires??'—')+kv('Next report',nextTmr()||'—')}
+setInterval(()=>{if(S.sys){nodeState();const t=$('#k-tmr .kv:last-child span:last-child');if(t)t.textContent=nextTmr()||'—'}},1000);
+
+/* ---------- raw messages ---------- */
+function pretty(t){let o;try{o=JSON.parse(t)}catch(e){return t}if(typeof o!=='object'||!o)return JSON.stringify(o);
+  return'{\n'+Object.entries(o).map(([k,v])=>'  "'+k+'": '+(Array.isArray(v)&&v.length&&typeof v[0]==='object'?'[\n'+v.map(x=>'    '+JSON.stringify(x)).join(',\n')+'\n  ]':JSON.stringify(v))).join(',\n')+'\n}'}
+function rawStat(){const now=Date.now();S.rawT=S.rawT.filter(t=>now-t<60000);$('#rawstat').textContent=`${S.rawN} messages · ${(S.rawB/1024).toFixed(1)} KB · ${S.rawT.length} in the last minute${S.paused?' · paused':''}`}
+function addRaw(topic,txt,kind){S.rawN++;S.rawB+=txt.length;S.rawT.push(Date.now());rawStat();if(S.paused)return;
+  const sub=topic.startsWith(S.pre+'/')?topic.slice(S.pre.length+1):topic;
+  const li=document.createElement('li');li.className=kind;li.innerHTML=`<details><summary><time class="mono">${clk(Date.now())}</time><span class="tp ${kind}">${kind==='sent'?'sent → ':''}${esc(sub)}</span><span class="pv mono">${esc(txt.slice(0,90))}</span><span class="by mono">${txt.length} B</span></summary><pre class="mono">${esc(pretty(txt))}</pre></details>`;
+  const ol=$('#raw');ol.prepend(li);while(ol.children.length>120)ol.lastChild.remove()}
+$('#rawf').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.id==='pause'){S.paused=!S.paused;b.setAttribute('aria-pressed',S.paused);b.textContent=S.paused?'Resume':'Pause';rawStat();return}
+  $('#raw').dataset.f=b.dataset.f;$$('#rawf button[data-f]').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+
+/* ---------- incoming ---------- */
+const KNOWN=['telemetry','system','event','ack','status','button'];
+function handle(topic,txt){const sub=topic.slice(S.pre.length+1);if(sub==='cmd')return;
+  addRaw(topic,txt,KNOWN.includes(sub)?sub:'event');S.lastMsg=Date.now();
+  if(sub==='status'){onStatus(txt);return}let o;try{o=JSON.parse(txt)}catch(e){log('Could not read the JSON on '+sub,'bad');return}
+  if(sub==='telemetry')onTelemetry(o);else if(sub==='system')onSystem(o);else if(sub==='event')onEvent(o);else if(sub==='ack')onAck(o);else if(sub==='button')onButton(o)}
+function onTelemetry(o){const now=Date.now();S.lastSeq=o.seq??'?';S.recvAt=now;if(S.mode==='live')setPill('live','Live · ESP32 online');
+  M.forEach(m=>{if(typeof o[m.k]==='number'){const a=S.hist[m.k];a.push({v:o[m.k],ts:now});if(a.length>90)a.shift()}});
+  updateCards();updMeta();drawHist();if(S.replaying)S.pending=o;else startReplay(o)}
+function onSystem(o){S.sys=o;S.sysAt=Date.now();S.tasks={};(o.tasks||[]).forEach(t=>S.tasks[t.n]=t);
+  if((o.dropped||0)>S.dropped)log(`${o.dropped-S.dropped} reading(s) dropped because dataQueue was full`,'warn');S.dropped=o.dropped||0;
+  renderSys();nodeState();
+  run([{nodes:[13],dur:450},{edge:'13-3',dur:EM},{nodes:[3],dur:300},{edge:'3-4',dur:EM},{nodes:[4],dur:200},{edge:'4-5',dur:EM},{nodes:[5],dur:300}],'spk')}
+function onEvent(o){log(o.msg||o.e||'event',o.lvl==='warn'||o.lvl==='bad'?o.lvl:'')}
+function onStatus(t){t=t.trim();if(t==='offline'){setPill('bad','ESP32 offline');log('ESP32 went offline (last-will message from the broker)','bad')}else if(t==='online'){log('ESP32 is online');if(S.mode==='live')setPill('live','Live · ESP32 online')}}
+function onButton(o){const tr=parseTr(o.tr);log(`BOOT button pressed (#${o.n}): interrupt → task wake-up took ${us(o.lat)}`);
+  const step=f=>tr.find(x=>x.fn===f),sayF=f=>{const r=step(f);return r?say(r):''};
+  run([{nodes:[6],dur:600,text:sayF('buttonISR')},{edge:'6-7',dur:EM,text:sayF('xSemaphoreGiveFromISR')},{nodes:[7],dur:600,text:sayF('xSemaphoreTake(buttonSem)')},{nodes:[7],dur:500,text:sayF('vTaskDelay(debounce)')},{nodes:[7,12,9],dur:400,text:'<b>ButtonTask</b> prints a log line, holding <b class="mono">serialMutex</b>'},{edge:'7-1',dur:EM,text:sayF('xTaskNotifyGive(SensorTask)')},{nodes:[1],dur:400},{edge:'7-8',dur:EM,text:FN['K:xQueueSend(outQueue)']&&'<b>ButtonTask</b> runs <b class="mono">xQueueSend(outQueue)</b>: '+FN['K:xQueueSend(outQueue)']},{nodes:[8],dur:300},{edge:'8-3',dur:EM},{nodes:[3],dur:300},{edge:'3-4',dur:EM},{nodes:[4],dur:200},{edge:'4-5',dur:EM},{nodes:[5],dur:300}],'spk',s=>{if(s.text)$('#now').innerHTML=s.text})}
+
+/* ---------- sending commands ---------- */
+$('#leds').innerHTML=LEDS.map(([n,c])=>`<button type="button" data-c="${c}"><i class="sw" style="background:${c==='#000000'?'transparent':c}"></i>${n}</button>`).join('');
+function cmdItem(id,label){const ol=$('#cmds');ol.querySelector('.empty')?.remove();const li=document.createElement('li');li.id='cmd-'+id;li.innerHTML=`<div class="ch"><b>${esc(label)}</b><span class="cs">sending…</span></div><ol class="ctr"></ol>`;ol.prepend(li);while(ol.children.length>30)ol.lastChild.remove()}
+function sendCmd(obj,label){S.pre=$('#pre').value.trim().replace(/\/+$/,'');
+  if(S.mode==='live'&&!(S.client&&S.client.connected)){log('Not connected to the broker, so nothing was sent','bad');return}
+  const id=++S.cmdId;obj={id,...obj};const txt=JSON.stringify(obj);
+  if(S.mode==='live')S.client.publish(S.pre+'/cmd',txt);
+  S.cmds[id]={t:performance.now(),cmd:obj.cmd};cmdItem(id,label);addRaw(S.pre+'/cmd',txt,'sent');
+  run([{edge:'c5-4',dur:EM},{nodes:[4],dur:260},{edge:'c4-3',dur:EM},{nodes:[3],dur:260}],'cpk');
+  S.cmds[id].timer=setTimeout(()=>{const li=$('#cmd-'+id);if(li){const c=li.querySelector('.cs');c.className='cs bad';c.textContent='No reply in 6 s. Is the ESP32 online?'}},6000);
+  if(S.mode==='demo')setTimeout(()=>demoAck(obj),150+rnd()*250)}
+function onAck(o){const c=S.cmds[o.id],li=$('#cmd-'+o.id);if(c)clearTimeout(c.timer);const rtt=c?Math.round(performance.now()-c.t):null;
+  if(o.cmd==='led'&&o.ok&&o.led){S.led=String(o.led);nodeState()}
+  const tr=parseTr(o.tr);
+  if(li){const cs=li.querySelector('.cs');cs.className='cs '+(o.ok?'ok':'bad');cs.textContent=(o.ok?'✓ ':'✗ ')+(o.reply||'')+(rtt!=null?` · ${rtt} ms round trip`:'');
+    li.querySelector('.ctr').innerHTML=tr.map(r=>`<li><b>${esc(who(r.task))}</b> · <span class="mono">${esc(fnName(r.fn))}</span> · ${esc(desc(r))}${r.d>=0?` (${us(r.d)})`:''}</li>`).join('')}
+  log(`ESP32 replied to "${o.cmd}": ${o.reply||''}`,o.ok?'':'warn');
+  const h=tr.find(r=>r.task==='C'&&!/^xQueue/.test(r.fn)&&!/serialMutex|Serial/.test(r.fn)),usesMx=tr.some(r=>/serialMutex/.test(r.fn));
+  run([{nodes:[3],dur:260},{edge:'3-11',dur:EM},{nodes:[11],dur:320},{edge:'11-10',dur:EM},{nodes:[10],dur:550,text:h?say(h):''},...(usesMx?[{nodes:[10,12],dur:450,text:'<b>CommandTask</b> takes <b class="mono">serialMutex</b>, prints your message, then gives it back',mutex:'held by CommandTask'},{nodes:[10,12],dur:10,mutex:''}]:[]),...(['led','msg'].includes(o.cmd)?[{edge:'10-9',dur:EM},{nodes:[9],dur:600}]:[]),{edge:'10-8',dur:EM},{nodes:[8],dur:320,text:'<b>CommandTask</b> runs <b class="mono">xQueueSend(outQueue)</b>: '+FN['C:xQueueSend(outQueue)']},{edge:'8-3',dur:EM},{nodes:[3],dur:260},{edge:'3-4',dur:EM},{nodes:[4],dur:200},{edge:'4-5',dur:EM},{nodes:[5],dur:300}],'cpk',s=>{if(s.text)$('#now').innerHTML=s.text;if('mutex'in s&&!S.replaying){S.mutexTmp=s.mutex||null;nodeState()}})}
+$('#msgform').addEventListener('submit',e=>{e.preventDefault();const t=$('#msg').value.trim();if(!t){$('#msg').focus();return}sendCmd({cmd:'msg',text:t},`Message: "${t}"`);$('#msg').value=''});
+$('#leds').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const l=LEDS.find(x=>x[1]===b.dataset.c);sendCmd({cmd:'led',color:b.dataset.c},`LED → ${l[0]}`)});
+$('#ints').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;sendCmd({cmd:'interval',ms:+b.dataset.ms},`Read every ${b.textContent}`)});
+$('#ping').addEventListener('click',()=>sendCmd({cmd:'ping'},'Ping'));
+let armT=null;$('#restart').addEventListener('click',()=>{const b=$('#restart');if(!b.dataset.armed){b.dataset.armed='1';b.textContent='Tap again to restart';armT=setTimeout(()=>{delete b.dataset.armed;b.textContent='Restart ESP32'},3000);return}clearTimeout(armT);delete b.dataset.armed;b.textContent='Restart ESP32';sendCmd({cmd:'restart'},'Restart ESP32')});
+
+/* ---------- demo data (same format as the firmware) ---------- */
+let dT=null,dS=null,seq=0,boot=0,dInt=2000,dLive=true;const base={t:27.4,h:58,gas:430,lux:540,p:1006.8},step={t:.25,h:1.1,gas:12,lux:28,p:.15},lim={t:[18,40],h:[25,90],gas:[300,900],lux:[0,2000],p:[995,1020]};
+const D0={mtx:0,wait:0,maxw:0,isr:0,taken:0,presses:0,lat:0,nS:0,nM:0,fires:0};let dd={...D0},lastWake=0;
+const nowUs=()=>Math.round((performance.now()-boot)*1000);
+function dMutex(tr,task,c,line){const w=rnd()<.06?400+(rnd()*1800|0):2+(rnd()*6|0);dd.mtx++;if(w>100)dd.wait++;dd.maxw=Math.max(dd.maxw,w);tr.push(['xSemaphoreTake(serialMutex)',task,c,w]);c+=w;const p=300+(rnd()*160|0);tr.push(['Serial.println',task,c,p]);c+=p;tr.push(['xSemaphoreGive(serialMutex)',task,c,3]);return c+3}
+function dTel(byButton){if(!dLive)return;seq++;for(const k in base)base[k]=Math.min(lim[k][1],Math.max(lim[k][0],base[k]+(rnd()-.5)*step[k]*2));
+  let c=nowUs();const slept=Math.max(1000,c-lastWake);lastWake=c;const tr=[['ulTaskNotifyTake','S',c-slept,slept]];
+  [['readTemperature',5100+(rnd()*400|0)],['readHumidity',20+(rnd()*20|0)],['readGas',55+(rnd()*20|0)],['readLight',1150+(rnd()*200|0)],['readPressure',850+(rnd()*150|0)]].forEach(([f,d])=>{tr.push([f,'S',c,d]);c+=d});
+  c=dMutex(tr,'S',c);tr.push(['xQueueSend(dataQueue)','S',c,-2]);c+=rnd()<.12?20000+(rnd()*60000|0):30+(rnd()*300|0);tr.push(['xQueueReceive(dataQueue)','M',c,-2]);c=dMutex(tr,'M',c+5);tr.push(['buildJson','M',c,160+(rnd()*60|0)]);c+=200;tr.push(['mqtt.publish','M',c,-1]);
+  handle(S.pre+'/telemetry',JSON.stringify({seq,why:byButton?'button':'timer',t:+base.t.toFixed(1),h:Math.round(base.h),gas:Math.round(base.gas),lux:Math.round(base.lux),p:+base.p.toFixed(1),tr}))}
+function dSys(){if(!dLive)return;dd.fires++;dd.nM++;const busy=rnd()<.85?'B':'Y';
+  handle(S.pre+'/system',JSON.stringify({heap:206000-(rnd()*6000|0),minheap:191200,uptime:Math.round((performance.now()-boot)/1000),rssi:-55-(rnd()*14|0),interval:dInt,q:rnd()<.15?1:0,qmax:10,cq:0,cqmax:5,oq:0,oqmax:6,dropped:0,cdropped:0,cpu:[14+(rnd()*12|0),3+(rnd()*5|0)],
+    mutex:{holder:rnd()<.08?'SensorTask':'',takes:dd.mtx,waits:dd.wait,maxwait:dd.maxw},sem:{isr:dd.isr,taken:dd.taken,presses:dd.presses,lat:dd.lat},ev:{wifi:1,mqtt:1},tmr:{period:5000,fires:dd.fires,active:1},ntf:{sensor:dd.nS,mqtt:dd.nM},
+    tasks:[{n:'SensorTask',s:busy,c:1,pr:2,st:3100+(rnd()*80|0)},{n:'MqttTask',s:rnd()<.8?'B':'Y',c:0,pr:1,st:6900+(rnd()*60|0)},{n:'CommandTask',s:'B',c:1,pr:1,st:5200+(rnd()*40|0)},{n:'ButtonTask',s:'B',c:1,pr:3,st:4400+(rnd()*40|0)}]}))}
+function dButton(){if(!dLive||S.mode!=='demo')return;const bounces=1+(rnd()*3|0);dd.isr+=bounces;dd.taken++;dd.presses++;dd.nS++;dd.lat=18+(rnd()*30|0);
+  let c=nowUs();const tr=[['buttonISR','I',c,-2],['xSemaphoreGiveFromISR','I',c,-2],['xSemaphoreTake(buttonSem)','K',c+dd.lat,dd.lat]];c+=dd.lat;tr.push(['vTaskDelay(debounce)','K',c,50000+(rnd()*900|0)]);c+=51000;c=dMutex(tr,'K',c);tr.push(['xTaskNotifyGive(SensorTask)','K',c,4]);tr.push(['xQueueSend(outQueue)','K',c+5,-2]);
+  handle(S.pre+'/button',JSON.stringify({n:dd.presses,lat:dd.lat,tr}));setTimeout(()=>dTel(true),120)}
+function demoAck(o){if(!dLive||S.mode!=='demo')return;let c=nowUs();const map={led:['setLed',`LED set to ${o.color}`],interval:['setInterval',`SensorTask now reads every ${o.ms} ms`],msg:['showMessage','Printed on the Serial Monitor'],ping:['ping','pong'],restart:['ESP.restart','Restarting in 1 second']};const[fn,reply]=map[o.cmd]||['handleCommand','Unknown command'];
+  const tr=[['mqttCallback','M',c,-2],['xQueueReceive(cmdQueue)','C',c+40,-2]];c+=45;
+  if(o.cmd==='msg'){tr.push(['showMessage','C',c,-2]);c=dMutex(tr,'C',c)}else{tr.push([fn,'C',c,o.cmd==='restart'?-2:6+(rnd()*20|0)]);c+=30}tr.push(['xQueueSend(outQueue)','C',c,-2]);
+  const a={id:o.id,cmd:o.cmd,ok:!!map[o.cmd],reply,tr};if(o.cmd==='led')a.led=o.color;
+  handle(S.pre+'/ack',JSON.stringify(a));
+  if(o.cmd==='interval'){dInt=o.ms;clearInterval(dT);dT=setInterval(()=>dTel(false),dInt)}
+  if(o.cmd==='restart'){setTimeout(()=>{dLive=false;handle(S.pre+'/status','offline')},900);setTimeout(()=>{boot=performance.now();lastWake=0;seq=0;dd={...D0};dInt=2000;S.led='#000000';dLive=true;handle(S.pre+'/status','online');handle(S.pre+'/event',JSON.stringify({e:'mqtt_connected',msg:'ESP32 connected to the MQTT broker',lvl:''}));clearInterval(dT);dT=setInterval(()=>dTel(false),dInt);nodeState()},4500)}}
+function stopDemo(){clearInterval(dT);clearInterval(dS);dT=dS=null}
+function resetAll(){M.forEach(m=>S.hist[m.k]=[]);S.tasks={};S.sys=null;S.sysAt=0;S.dropped=0;S.lastSeq=null;S.pending=null;S.led='#000000';S.mutexTmp=null;updateCards();updMeta();drawHist();renderSys();nodeState();$('#trace').innerHTML='<tr><td colspan="5" class="empty">No trace yet</td></tr>';$('#trhead').textContent='—';$('#now').textContent='Waiting for the first reading…'}
+function startDemo(){stopDemo();endClient();S.mode='demo';S.pre=$('#pre').value.trim().replace(/\/+$/,'');$('#cmdtopic').textContent=S.pre+'/cmd';resetAll();setPill('demo','Demo data (not your ESP32)');log('Demo mode: all data is made up in your browser');
+  $('#simbtn').hidden=false;dLive=true;dd={...D0};boot=performance.now()-21000;lastWake=0;seq=0;dInt=2000;dSys();dTel(false);dT=setInterval(()=>dTel(false),dInt);dS=setInterval(dSys,5000)}
+$('#simbtn').addEventListener('click',dButton);
+
+/* ---------- live MQTT ---------- */
+try{const u=localStorage.getItem('esp-url'),p=localStorage.getItem('esp-pre');if(u)$('#url').value=u;if(p)$('#pre').value=p}catch(e){}
+function endClient(){if(S.client){try{S.client.end(true)}catch(e){}S.client=null}}
+function connect(){const url=$('#url').value.trim(),pre=$('#pre').value.trim().replace(/\/+$/,'');
+  if(!window.mqtt){setPill('bad','MQTT library missing');log('The MQTT library did not load. Open this page with internet access.','bad');return}
+  if(!/^wss?:\/\//.test(url)){log('The broker URL must start with ws:// or wss://','bad');return}
+  if(!pre){log('Enter the topic prefix used in the firmware','bad');return}
+  try{localStorage.setItem('esp-url',url);localStorage.setItem('esp-pre',pre)}catch(e){}
+  stopDemo();endClient();S.mode='live';S.pre=pre;$('#cmdtopic').textContent=pre+'/cmd';$('#simbtn').hidden=true;resetAll();S.connAt=Date.now();S.lastMsg=0;setPill('conn','Connecting…');log('Connecting to '+url);
+  let c;try{c=mqtt.connect(url,{clientId:'web-'+rnd().toString(16).slice(2,10),reconnectPeriod:3000,connectTimeout:8000,clean:true})}catch(e){setPill('bad','Could not connect');log('Connect failed: '+e.message,'bad');return}
+  S.client=c;
+  c.on('connect',()=>{S.connAt=Date.now();setPill('wait','Connected · waiting for ESP32');c.subscribe(pre+'/#',{qos:0},err=>{if(err)log('Subscribe failed: '+err.message,'bad');else log('Listening on '+pre+'/#. Press the BOOT button on the board to test the interrupt.')})});
+  c.on('reconnect',()=>setPill('conn','Reconnecting…'));
+  c.on('error',e=>log('Broker error: '+e.message,'bad'));
+  c.on('close',()=>{if(S.mode==='live'&&S.client===c)setPill('bad','Disconnected from broker')});
+  c.on('message',(t,b)=>{if(S.client===c)handle(t,b.toString())});
+  location.hash='inside'}
+$('#cform').addEventListener('submit',e=>{e.preventDefault();connect()});
+$('#demo').addEventListener('click',startDemo);
+$('#copy').addEventListener('click',()=>{const b=$('#copy');navigator.clipboard.writeText($('#fmt').textContent).then(()=>{b.textContent='Copied'},()=>{b.textContent='Select and copy'});setTimeout(()=>b.textContent='Copy',1800)});
+setInterval(()=>{updMeta();rawStat();if(S.mode!=='live'||!S.client||!S.client.connected)return;const since=Date.now()-(S.lastMsg||S.connAt);if(since>10000)setPill('wait',`Connected · no data from ESP32 for ${Math.round(since/1000)} s`)},1000);
+
+startDemo();
+}
+</script>
+</body>
+</html>
